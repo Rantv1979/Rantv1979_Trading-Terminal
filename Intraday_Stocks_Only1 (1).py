@@ -1,16 +1,11 @@
 """
-Intraday Live Trading Terminal - Cleaned, PEP8-aligned, ASCII-safe version.
+Intraday Live Trading Terminal - Enhanced Version
 
-This file is a cleaned and production-ready version of the optimized
-intraday trading terminal. It includes:
-- Cached yfinance access
-- Vectorized market profile
-- Indicator calculations
-- Signal generation with weighted scoring and volume confirmation
-- Paper trading engine
-- Streamlit user interface
-
-No non-ASCII punctuation or stray text outside comments/strings.
+This file includes:
+- Full Nifty 50 & 100 scanning
+- Limited auto-execution (10 confirmed trades max)
+- Enhanced signal display with entry time and current price
+- Improved trade management
 """
 
 import time
@@ -26,19 +21,21 @@ import plotly.graph_objects as go
 from streamlit_autorefresh import st_autorefresh
 
 # Configuration
-st.set_page_config(page_title="Intraday Terminal Pro - Cleaned", layout="wide")
+st.set_page_config(page_title="Intraday Terminal Pro - Enhanced", layout="wide")
 IND_TZ = pytz.timezone("Asia/Kolkata")
 
 CAPITAL = 1_000_000.0
 TRADE_ALLOC = 0.15
 MAX_DAILY_TRADES = 10
 MAX_STOCK_TRADES = 5
+MAX_AUTO_TRADES = 10  # Maximum auto-execution trades
 
 SIGNAL_REFRESH_MS = 60000
 PRICE_REFRESH_MS = 3000
 
 MARKET_OPTIONS = ["CASH"]
 
+# Enhanced Nifty 50 & 100 Lists
 NIFTY_50 = [
     "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "HINDUNILVR.NS",
     "ICICIBANK.NS", "KOTAKBANK.NS", "BHARTIARTL.NS", "ITC.NS", "LT.NS",
@@ -52,14 +49,23 @@ NIFTY_50 = [
     "HEROMOTOCO.NS", "INDUSINDBK.NS", "ADANIENT.NS", "TATACONSUM.NS", "BPCL.NS"
 ]
 
-NIFTY_100 = NIFTY_50[:]
+# Extended Nifty 100 (including Nifty 50 + additional stocks)
+NIFTY_100 = NIFTY_50 + [
+    "HDFC.NS", "BAJAJHLDNG.NS", "TATAMOTORS.NS", "VEDANTA.NS", "PIDILITIND.NS",
+    "BERGEPAINT.NS", "AMBUJACEM.NS", "DABUR.NS", "HAVELLS.NS", "ICICIPRULI.NS",
+    "MARICO.NS", "PEL.NS", "SIEMENS.NS", "TORNTPHARM.NS", "ACC.NS",
+    "AUROPHARMA.NS", "BOSCHLTD.NS", "GLENMARK.NS", "MOTHERSUMI.NS", "BIOCON.NS",
+    "CADILAHC.NS", "COLPAL.NS", "CONCOR.NS", "DLF.NS", "GODREJCP.NS",
+    "HINDPETRO.NS", "IBULHSGFIN.NS", "IOC.NS", "JINDALSTEL.NS", "LUPIN.NS",
+    "MANAPPURAM.NS", "MCDOWELL-N.NS", "NMDC.NS", "PETRONET.NS", "PFC.NS",
+    "PNB.NS", "RBLBANK.NS", "SAIL.NS", "SRTRANSFIN.NS", "TATAPOWER.NS",
+    "YESBANK.NS", "ZEEL.NS"
+]
 
 # Utilities
 
-
 def now_indian():
     return datetime.now(IND_TZ)
-
 
 def market_open():
     n = now_indian()
@@ -70,7 +76,6 @@ def market_open():
     except Exception:
         return False
 
-
 def should_auto_close():
     n = now_indian()
     try:
@@ -79,10 +84,8 @@ def should_auto_close():
     except Exception:
         return False
 
-
 def ema(series, span):
     return series.ewm(span=span, adjust=False).mean()
-
 
 def rsi(series, period=14):
     delta = series.diff()
@@ -92,7 +95,6 @@ def rsi(series, period=14):
     rs = rs.fillna(0)
     return 100 - (100 / (1 + rs))
 
-
 def calculate_atr(high, low, close, period=14):
     tr1 = high - low
     tr2 = (high - close.shift()).abs()
@@ -100,14 +102,12 @@ def calculate_atr(high, low, close, period=14):
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     return tr.rolling(period).mean()
 
-
 def stochastic(high, low, close, k_period=14, d_period=3):
     lowest_low = low.rolling(window=k_period).min()
     highest_high = high.rolling(window=k_period).max()
     k = 100 * (close - lowest_low) / (highest_high - lowest_low)
     d = k.rolling(window=d_period).mean()
     return k.fillna(50), d.fillna(50)
-
 
 def macd(close, fast=12, slow=26, signal=9):
     ema_fast = ema(close, fast)
@@ -117,14 +117,12 @@ def macd(close, fast=12, slow=26, signal=9):
     hist = macd_line - signal_line
     return macd_line, signal_line, hist
 
-
 def bollinger_bands(close, period=20, std_dev=2):
     sma = close.rolling(window=period).mean()
     std = close.rolling(window=period).std()
     upper = sma + (std * std_dev)
     lower = sma - (std * std_dev)
     return upper, sma, lower
-
 
 def calculate_market_profile_vectorized(high, low, close, volume, bins=20):
     low_val = min(low.min(), close.min())
@@ -156,7 +154,6 @@ def calculate_market_profile_vectorized(high, low, close, volume, bins=20):
     profile = [{"price": float(c), "volume": int(v)} for c, v in zip(centers, hist)]
     return {"poc": poc, "value_area_high": va_high, "value_area_low": va_low, "profile": profile}
 
-
 def calculate_support_resistance_advanced(high, low, close, period=20):
     resistance = []
     support = []
@@ -174,13 +171,12 @@ def calculate_support_resistance_advanced(high, low, close, period=20):
     return {"support": float(np.mean(recent_sup)), "resistance": float(np.mean(recent_res)),
             "support_levels": recent_sup, "resistance_levels": recent_res}
 
-
-# Data manager
-
+# Data Manager
 
 class EnhancedDataManager:
     def __init__(self):
         self.price_cache = {}
+        self.signal_cache = {}
 
     def _validate_live_price(self, symbol):
         now_ts = time.time()
@@ -209,7 +205,7 @@ class EnhancedDataManager:
         return float(base)
 
     @st.cache_data(ttl=30)
-    def _fetch_yf(_self, symbol, period, interval):  # FIXED: Added underscore before self
+    def _fetch_yf(_self, symbol, period, interval):
         try:
             return yf.download(symbol, period=period, interval=interval, progress=False)
         except Exception:
@@ -305,9 +301,7 @@ class EnhancedDataManager:
         df["Resistance"] = sr["resistance"]
         return df
 
-
-# Trading engine
-
+# Trading Engine
 
 class EnhancedIntradayTrader:
     def __init__(self, capital=CAPITAL):
@@ -317,6 +311,7 @@ class EnhancedIntradayTrader:
         self.trade_log = []
         self.daily_trades = 0
         self.stock_trades = 0
+        self.auto_trades_count = 0  # Track auto-executed trades
         self.last_reset = now_indian().date()
         self.selected_market = "CASH"
         self.auto_execution = False
@@ -328,7 +323,14 @@ class EnhancedIntradayTrader:
         if current_date != self.last_reset:
             self.daily_trades = 0
             self.stock_trades = 0
+            self.auto_trades_count = 0
             self.last_reset = current_date
+
+    def can_auto_trade(self):
+        """Check if auto trading is allowed within limits"""
+        return (self.auto_trades_count < MAX_AUTO_TRADES and 
+                self.daily_trades < MAX_DAILY_TRADES and
+                market_open())
 
     def calculate_support_resistance(self, symbol, current_price):
         try:
@@ -372,22 +374,39 @@ class EnhancedIntradayTrader:
                     total += pos["quantity"] * pos["entry_price"]
         return total
 
-    def execute_trade(self, symbol, action, quantity, price, stop_loss=None, target=None, win_probability=0.75):
+    def execute_trade(self, symbol, action, quantity, price, stop_loss=None, target=None, win_probability=0.75, auto_trade=False):
         self.reset_daily_counts()
+        
         if self.daily_trades >= MAX_DAILY_TRADES:
             return False, "Daily trade limit reached"
         if self.stock_trades >= MAX_STOCK_TRADES:
             return False, "Stock trade limit reached"
+        if auto_trade and self.auto_trades_count >= MAX_AUTO_TRADES:
+            return False, "Auto trade limit reached"
+            
         trade_value = float(quantity) * float(price)
         if action == "BUY" and trade_value > self.cash:
             return False, "Insufficient capital"
+            
         trade_id = f"TRADE_{symbol}_{len(self.trade_log)}_{int(time.time())}"
-        record = {"trade_id": trade_id, "symbol": symbol, "action": action, "quantity": int(quantity),
-                  "entry_price": float(price), "stop_loss": float(stop_loss) if stop_loss else None,
-                  "target": float(target) if target else None, "timestamp": now_indian(),
-                  "status": "OPEN", "current_pnl": 0.0, "current_price": float(price),
-                  "win_probability": float(win_probability), "closed_pnl": 0.0,
-                  "entry_time": now_indian().strftime("%H:%M:%S")}
+        record = {
+            "trade_id": trade_id, 
+            "symbol": symbol, 
+            "action": action, 
+            "quantity": int(quantity),
+            "entry_price": float(price), 
+            "stop_loss": float(stop_loss) if stop_loss else None,
+            "target": float(target) if target else None, 
+            "timestamp": now_indian(),
+            "status": "OPEN", 
+            "current_pnl": 0.0, 
+            "current_price": float(price),
+            "win_probability": float(win_probability), 
+            "closed_pnl": 0.0,
+            "entry_time": now_indian().strftime("%H:%M:%S"),
+            "auto_trade": auto_trade
+        }
+        
         if action == "BUY":
             self.positions[symbol] = record
             self.cash -= trade_value
@@ -396,10 +415,15 @@ class EnhancedIntradayTrader:
             record["margin_used"] = margin
             self.positions[symbol] = record
             self.cash -= margin
+            
         self.stock_trades += 1
         self.trade_log.append(record)
         self.daily_trades += 1
-        return True, f"{action} {int(quantity)} {symbol} @ ₹{price:.2f}"
+        
+        if auto_trade:
+            self.auto_trades_count += 1
+            
+        return True, f"{'[AUTO] ' if auto_trade else ''}{action} {int(quantity)} {symbol} @ ₹{price:.2f}"
 
     def update_positions_pnl(self):
         if should_auto_close() and not self.auto_close_triggered:
@@ -479,12 +503,23 @@ class EnhancedIntradayTrader:
                     pnl = (pos["entry_price"] - price) * pos["quantity"]
                 var = ((price - pos["entry_price"]) / pos["entry_price"]) * 100
                 sup, res = self.calculate_support_resistance(symbol, price)
-                out.append({"Symbol": symbol.replace(".NS", ""), "Action": pos["action"], "Quantity": pos["quantity"],
-                            "Entry Price": f"₹{pos['entry_price']:.2f}", "Current Price": f"₹{price:.2f}",
-                            "P&L": f"₹{pnl:+.2f}", "Variance %": f"{var:+.2f}%", "Stop Loss": f"₹{pos.get('stop_loss', 0):.2f}",
-                            "Target": f"₹{pos.get('target', 0):.2f}", "Support": f"₹{sup:.2f}", "Resistance": f"₹{res:.2f}",
-                            "Win %": f"{pos.get('win_probability', 0.75)*100:.1f}%", "Entry Time": pos.get("entry_time"),
-                            "Status": pos.get("status")})
+                out.append({
+                    "Symbol": symbol.replace(".NS", ""), 
+                    "Action": pos["action"], 
+                    "Quantity": pos["quantity"],
+                    "Entry Price": f"₹{pos['entry_price']:.2f}", 
+                    "Current Price": f"₹{price:.2f}",
+                    "P&L": f"₹{pnl:+.2f}", 
+                    "Variance %": f"{var:+.2f}%", 
+                    "Stop Loss": f"₹{pos.get('stop_loss', 0):.2f}",
+                    "Target": f"₹{pos.get('target', 0):.2f}", 
+                    "Support": f"₹{sup:.2f}", 
+                    "Resistance": f"₹{res:.2f}",
+                    "Win %": f"{pos.get('win_probability', 0.75)*100:.1f}%", 
+                    "Entry Time": pos.get("entry_time"),
+                    "Auto Trade": "Yes" if pos.get("auto_trade") else "No",
+                    "Status": pos.get("status")
+                })
             except Exception:
                 continue
         return out
@@ -495,24 +530,57 @@ class EnhancedIntradayTrader:
         total_trades = len(closed)
         open_pnl = sum([p.get("current_pnl", 0) for p in self.positions.values() if p.get("status") == "OPEN"])
         if total_trades == 0:
-            return {"total_trades": 0, "win_rate": 0.0, "total_pnl": 0.0, "avg_pnl": 0.0, "open_positions": len(self.positions),
-                    "open_pnl": open_pnl}
+            return {
+                "total_trades": 0, 
+                "win_rate": 0.0, 
+                "total_pnl": 0.0, 
+                "avg_pnl": 0.0, 
+                "open_positions": len(self.positions),
+                "open_pnl": open_pnl,
+                "auto_trades": self.auto_trades_count
+            }
         wins = len([t for t in closed if t.get("closed_pnl", 0) > 0])
         total_pnl = sum([t.get("closed_pnl", 0) for t in closed])
         win_rate = wins / total_trades if total_trades else 0.0
         avg_pnl = total_pnl / total_trades if total_trades else 0.0
-        return {"total_trades": total_trades, "win_rate": win_rate, "total_pnl": total_pnl, "avg_pnl": avg_pnl,
-                "open_positions": len(self.positions), "open_pnl": open_pnl}
+        
+        auto_trades = [t for t in self.trade_log if t.get("auto_trade")]
+        auto_closed = [t for t in auto_trades if t.get("status") == "CLOSED"]
+        auto_win_rate = len([t for t in auto_closed if t.get("closed_pnl", 0) > 0]) / len(auto_closed) if auto_closed else 0.0
+        
+        return {
+            "total_trades": total_trades, 
+            "win_rate": win_rate, 
+            "total_pnl": total_pnl, 
+            "avg_pnl": avg_pnl,
+            "open_positions": len(self.positions), 
+            "open_pnl": open_pnl,
+            "auto_trades": self.auto_trades_count,
+            "auto_win_rate": auto_win_rate
+        }
 
-    def generate_quality_signals(self, universe, max_scan=40, min_confidence=0.8, min_score=7):
+    def generate_quality_signals(self, universe, max_scan=None, min_confidence=0.8, min_score=7):
         signals = []
         stocks = NIFTY_50 if universe == "Nifty 50" else NIFTY_100
+        
+        # Scan all stocks in the universe
+        if max_scan is None:
+            max_scan = len(stocks)
+            
         weights = {"ema_trend": 3, "vwap": 2, "poc": 2, "macd": 2, "rsi": 1, "stoch": 1, "volume": 2}
-        for symbol in stocks[:max_scan]:
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        for idx, symbol in enumerate(stocks[:max_scan]):
             try:
+                status_text.text(f"Scanning {symbol} ({idx+1}/{len(stocks[:max_scan])})")
+                progress_bar.progress((idx + 1) / len(stocks[:max_scan]))
+                
                 data = data_manager.get_stock_data(symbol, "15m")
                 if data is None or len(data) < 30:
                     continue
+                    
                 live = float(data["Close"].iloc[-1])
                 ema8 = float(data["EMA8"].iloc[-1])
                 ema21 = float(data["EMA21"].iloc[-1])
@@ -532,6 +600,8 @@ class EnhancedIntradayTrader:
                 vol_latest = float(data["Volume"].iloc[-1])
                 vol_avg = float(data["Volume"].rolling(20).mean().iloc[-1]) if len(data["Volume"]) >= 20 else float(data["Volume"].mean())
                 volume_spike = vol_latest > vol_avg * 1.3
+                
+                # Bullish scoring
                 score = 0
                 ema_trend = ema8 > ema21 > ema50
                 if ema_trend:
@@ -553,13 +623,17 @@ class EnhancedIntradayTrader:
                     score += weights["stoch"]
                 if volume_spike:
                     score += weights["volume"]
+                    
                 max_possible = sum(weights.values())
                 confidence = score / max_possible
                 action = None
                 confirmed = False
+                
                 if score >= min_score and ema_trend and macd_cond:
                     action = "BUY"
                     confirmed = True
+                    
+                # Bearish scoring
                 bearish_score = 0
                 if ema8 < ema21 < ema50:
                     bearish_score += weights["ema_trend"]
@@ -575,11 +649,13 @@ class EnhancedIntradayTrader:
                     bearish_score += weights["stoch"]
                 if vol_latest > vol_avg * 1.3:
                     bearish_score += weights["volume"]
+                    
                 if bearish_score >= min_score and bearish_score > score:
                     action = "SELL"
                     score = bearish_score
                     confidence = bearish_score / max_possible
                     confirmed = True
+                    
                 if confirmed and confidence >= min_confidence:
                     entry = live
                     target, stop_loss = self.calculate_intraday_target_sl(entry, action, atr, live, support, resistance)
@@ -588,20 +664,69 @@ class EnhancedIntradayTrader:
                         continue
                     win_prob = min(0.90, 0.70 + (confidence - min_confidence) * 0.5)
                     potential_pnl = abs(target - entry) * 250.0
-                    signals.append({"symbol": symbol, "action": action, "entry": float(entry),
-                                    "current_price": float(live), "target": float(target), "stop_loss": float(stop_loss),
-                                    "confidence": float(confidence), "win_probability": float(win_prob),
-                                    "rsi": float(rsi_val), "potential_pnl": float(potential_pnl),
-                                    "risk_reward": float(rr), "atr": float(atr), "support": float(support),
-                                    "resistance": float(resistance), "score": int(score), "vwap": float(vwap),
-                                    "poc": float(poc), "confirmed": True})
-            except Exception:
+                    
+                    signals.append({
+                        "symbol": symbol, 
+                        "action": action, 
+                        "entry": float(entry),
+                        "current_price": float(live), 
+                        "target": float(target), 
+                        "stop_loss": float(stop_loss),
+                        "confidence": float(confidence), 
+                        "win_probability": float(win_prob),
+                        "rsi": float(rsi_val), 
+                        "potential_pnl": float(potential_pnl),
+                        "risk_reward": float(rr), 
+                        "atr": float(atr), 
+                        "support": float(support),
+                        "resistance": float(resistance), 
+                        "score": int(score), 
+                        "vwap": float(vwap),
+                        "poc": float(poc), 
+                        "confirmed": True,
+                        "entry_time": now_indian().strftime("%H:%M:%S"),
+                        "volume_ratio": vol_latest / vol_avg if vol_avg > 0 else 1.0
+                    })
+                    
+            except Exception as e:
                 continue
+                
+        progress_bar.empty()
+        status_text.empty()
+        
         signals.sort(key=lambda x: (x["score"], x["confidence"]), reverse=True)
-        self.signal_history = signals[:10]
-        return signals[:5]
+        self.signal_history = signals[:15]  # Keep more signals in history
+        
+        return signals[:10]  # Return top 10 signals
 
+    def auto_execute_signals(self, signals):
+        """Auto-execute top signals within limits"""
+        executed = []
+        for signal in signals[:3]:  # Auto-execute top 3 signals only
+            if not self.can_auto_trade():
+                break
+                
+            if signal["symbol"] in self.positions:
+                continue  # Skip if already in position
+                
+            qty = int((self.cash * TRADE_ALLOC) / signal["entry"])
+            if qty > 0:
+                success, msg = self.execute_trade(
+                    symbol=signal["symbol"], 
+                    action=signal["action"], 
+                    quantity=qty, 
+                    price=signal["entry"], 
+                    stop_loss=signal["stop_loss"], 
+                    target=signal["target"], 
+                    win_probability=signal["win_probability"],
+                    auto_trade=True
+                )
+                if success:
+                    executed.append(msg)
+                    
+        return executed
 
+# Initialize components
 data_manager = EnhancedDataManager()
 
 if "trader" not in st.session_state:
@@ -610,10 +735,11 @@ trader = st.session_state.trader
 
 # Streamlit UI
 
-st.markdown("<h1 style='text-align:center;'>Intraday Terminal Pro - Cleaned</h1>", unsafe_allow_html=True)
-st_autorefresh(interval=PRICE_REFRESH_MS, key="price_refresh_cleaned")
+st.markdown("<h1 style='text-align:center;'>Intraday Terminal Pro - Enhanced</h1>", unsafe_allow_html=True)
+st_autorefresh(interval=PRICE_REFRESH_MS, key="price_refresh_enhanced")
 
-cols = st.columns(6)
+# Top metrics
+cols = st.columns(7)
 try:
     nift = data_manager._validate_live_price("^NSEI")
     cols[0].metric("NIFTY 50", f"₹{nift:,.2f}")
@@ -627,59 +753,132 @@ except Exception:
 cols[2].metric("Market Status", "LIVE" if market_open() else "CLOSED")
 cols[3].metric("Auto Close", "15:10")
 cols[4].metric("Stock Trades", f"{trader.stock_trades}/{MAX_STOCK_TRADES}")
-cols[5].metric("Available Cash", f"₹{trader.cash:,.0f}")
+cols[5].metric("Auto Trades", f"{trader.auto_trades_count}/{MAX_AUTO_TRADES}")
+cols[6].metric("Available Cash", f"₹{trader.cash:,.0f}")
 
+# Sidebar configuration
 st.sidebar.header("Trading Configuration")
 trader.selected_market = st.sidebar.selectbox("Market Type", MARKET_OPTIONS)
 trader.auto_execution = st.sidebar.checkbox("Auto Execution", value=False)
 min_conf_percent = st.sidebar.slider("Minimum Confidence %", 70, 95, 80, 5)
 min_score = st.sidebar.slider("Minimum Score", 6, 12, 7, 1)
+scan_limit = st.sidebar.selectbox("Scan Limit", ["All Stocks", "Top 40", "Top 20"], index=0)
 
+# Convert scan limit to number
+max_scan_map = {"All Stocks": None, "Top 40": 40, "Top 20": 20}
+max_scan = max_scan_map[scan_limit]
+
+# Main tabs
 tabs = st.tabs(["Dashboard", "Signals", "Paper Trading", "History", "Charts"])
 
 with tabs[0]:
     st.subheader("Account Summary")
     trader.update_positions_pnl()
     perf = trader.get_performance_stats()
-    c1, c2, c3, c4 = st.columns(4)
+    
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Account Value", f"₹{trader.equity():,.0f}", delta=f"₹{trader.equity() - trader.initial_capital:+,.0f}")
     c2.metric("Available Cash", f"₹{trader.cash:,.0f}")
     c3.metric("Open Positions", len(trader.positions))
     c4.metric("Open P&L", f"₹{perf['open_pnl']:+.2f}")
+    c5.metric("Win Rate", f"{perf['win_rate']:.1%}")
+    
+    if perf['auto_trades'] > 0:
+        st.metric("Auto Trade Win Rate", f"{perf.get('auto_win_rate', 0):.1%}")
 
 with tabs[1]:
     st.subheader("Quality Signals")
-    universe = st.selectbox("Universe", ["Nifty 50", "Nifty 100"])
-    if st.button("Generate Signals") or trader.auto_execution:
-        signals = trader.generate_quality_signals(universe, max_scan=40, min_confidence=min_conf_percent / 100.0, min_score=min_score)
+    
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        universe = st.selectbox("Universe", ["Nifty 50", "Nifty 100"])
+        generate_btn = st.button("Generate Signals", type="primary")
+    
+    with col2:
+        if trader.auto_execution:
+            st.info("🔴 Auto Execution: ACTIVE (Max 10 trades)")
+        else:
+            st.info("⚪ Auto Execution: INACTIVE")
+    
+    if generate_btn or trader.auto_execution:
+        with st.spinner(f"Scanning {universe} stocks for signals..."):
+            signals = trader.generate_quality_signals(
+                universe, 
+                max_scan=max_scan,
+                min_confidence=min_conf_percent / 100.0, 
+                min_score=min_score
+            )
+        
         if signals:
-            rows = []
+            # Enhanced signal display with more information
+            signal_data = []
             for s in signals:
-                rows.append({"Symbol": s["symbol"].replace(".NS", ""), "Action": s["action"], "Entry": f"₹{s['entry']:.2f}",
-                             "Target": f"₹{s['target']:.2f}", "Stop": f"₹{s['stop_loss']:.2f}", "Conf": f"{s['confidence']:.2%}",
-                             "Win%": f"{s['win_probability']:.2%}", "R:R": f"{s['risk_reward']:.2f}", "Score": s["score"]})
-            st.dataframe(pd.DataFrame(rows), use_container_width=True)
+                signal_data.append({
+                    "Symbol": s["symbol"].replace(".NS", ""),
+                    "Action": s["action"],
+                    "Entry Price": f"₹{s['entry']:.2f}",
+                    "Current Price": f"₹{s['current_price']:.2f}",
+                    "Target": f"₹{s['target']:.2f}", 
+                    "Stop Loss": f"₹{s['stop_loss']:.2f}",
+                    "Confidence": f"{s['confidence']:.1%}",
+                    "Win %": f"{s['win_probability']:.1%}",
+                    "R:R": f"{s['risk_reward']:.2f}",
+                    "Score": s["score"],
+                    "RSI": f"{s['rsi']:.1f}",
+                    "Entry Time": s["entry_time"],
+                    "Volume Ratio": f"{s['volume_ratio']:.2f}x"
+                })
+            
+            df_signals = pd.DataFrame(signal_data)
+            st.dataframe(df_signals, use_container_width=True)
+            
+            # Auto-execution
+            if trader.auto_execution and trader.can_auto_trade():
+                executed = trader.auto_execute_signals(signals)
+                if executed:
+                    st.success("Auto-execution completed:")
+                    for msg in executed:
+                        st.write(f"✓ {msg}")
+                    st.rerun()
+            
+            # Manual execution section
             st.subheader("Manual Execution")
             for s in signals:
-                c1, c2 = st.columns([3, 1])
-                with c1:
-                    st.write(f"{s['symbol'].replace('.NS','')} - {s['action']} @ ₹{s['entry']:.2f} | R:R {s['risk_reward']:.2f}")
-                with c2:
+                col_a, col_b, col_c = st.columns([3, 1, 1])
+                with col_a:
+                    st.write(f"**{s['symbol'].replace('.NS','')}** - {s['action']} @ ₹{s['entry']:.2f} | "
+                           f"Target: ₹{s['target']:.2f} | Stop: ₹{s['stop_loss']:.2f} | "
+                           f"R:R: {s['risk_reward']:.2f} | Score: {s['score']}")
+                
+                with col_b:
                     qty = int((trader.cash * TRADE_ALLOC) / s["entry"])
-                    if qty > 0 and st.button(f"Exec {s['symbol']}", key=f"exec_{s['symbol']}"):
-                        success, msg = trader.execute_trade(symbol=s["symbol"], action=s["action"], quantity=qty, price=s["entry"], stop_loss=s["stop_loss"], target=s["target"], win_probability=s["win_probability"])
+                    st.write(f"Qty: {qty}")
+                
+                with col_c:
+                    if st.button(f"Execute", key=f"exec_{s['symbol']}"):
+                        success, msg = trader.execute_trade(
+                            symbol=s["symbol"], 
+                            action=s["action"], 
+                            quantity=qty, 
+                            price=s["entry"], 
+                            stop_loss=s["stop_loss"], 
+                            target=s["target"], 
+                            win_probability=s["win_probability"]
+                        )
                         if success:
                             st.success(msg)
                             st.rerun()
         else:
-            st.info("No confirmed signals found.")
+            st.info("No confirmed signals found with current criteria.")
 
 with tabs[2]:
     st.subheader("Paper Trading")
     trader.update_positions_pnl()
     open_pos = trader.get_open_positions_data()
+    
     if open_pos:
         st.dataframe(pd.DataFrame(open_pos), use_container_width=True)
+        
         st.write("Close positions:")
         cols_close = st.columns(4)
         for idx, symbol in enumerate(list(trader.positions.keys())):
@@ -689,7 +888,8 @@ with tabs[2]:
                     if success:
                         st.success(msg)
                         st.rerun()
-        if st.button("Close All"):
+        
+        if st.button("Close All Positions", type="primary"):
             for sym in list(trader.positions.keys()):
                 trader.close_position(sym)
             st.rerun()
@@ -701,9 +901,23 @@ with tabs[3]:
     if trader.trade_log:
         hist = []
         for t in trader.trade_log:
-            hist.append({"Symbol": t["symbol"].replace(".NS", ""), "Action": t["action"], "Qty": t["quantity"],
-                         "Entry": f"₹{t['entry_price']:.2f}", "Exit": f"₹{t.get('exit_price','N/A')}", "P&L": f"₹{t.get('closed_pnl', t.get('current_pnl', 0)):+.2f}", "Status": t["status"]})
+            hist.append({
+                "Symbol": t["symbol"].replace(".NS", ""), 
+                "Action": t["action"], 
+                "Qty": t["quantity"],
+                "Entry": f"₹{t['entry_price']:.2f}", 
+                "Exit": f"₹{t.get('exit_price','N/A')}", 
+                "P&L": f"₹{t.get('closed_pnl', t.get('current_pnl', 0)):+.2f}", 
+                "Status": t["status"],
+                "Auto": "Yes" if t.get("auto_trade") else "No",
+                "Entry Time": t.get("entry_time", "N/A")
+            })
         st.dataframe(pd.DataFrame(hist), use_container_width=True)
+        
+        # Performance summary
+        perf = trader.get_performance_stats()
+        st.metric("Overall Win Rate", f"{perf['win_rate']:.1%}")
+        
     else:
         st.info("No trades executed yet.")
 
@@ -711,29 +925,51 @@ with tabs[4]:
     st.subheader("Charts")
     left, right = st.columns([1, 3])
     with left:
-        symbol = st.selectbox("Select Stock", NIFTY_50)
+        symbol = st.selectbox("Select Stock", NIFTY_100)  # Include all Nifty 100 stocks
         interval = st.selectbox("Interval", ["5m", "15m", "30m"])
     with right:
         chart_data = data_manager.get_stock_data(symbol, interval)
         if chart_data is not None and len(chart_data) > 10:
             cp = chart_data["Close"].iloc[-1]
             st.write(f"{symbol.replace('.NS','')} - {interval} | Live Price: ₹{cp:.2f}")
-            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.5, 0.25, 0.25])
-            fig.add_trace(go.Candlestick(x=chart_data.index, open=chart_data["Open"], high=chart_data["High"], low=chart_data["Low"], close=chart_data["Close"], name="Price"), row=1, col=1)
+            
+            fig = make_subplots(
+                rows=3, cols=1, 
+                shared_xaxes=True, 
+                vertical_spacing=0.08, 
+                row_heights=[0.5, 0.25, 0.25],
+                subplot_titles=("Price & Market Profile", "MACD", "RSI & Volume")
+            )
+            
+            # Price chart
+            fig.add_trace(go.Candlestick(
+                x=chart_data.index, 
+                open=chart_data["Open"], 
+                high=chart_data["High"], 
+                low=chart_data["Low"], 
+                close=chart_data["Close"], 
+                name="Price"
+            ), row=1, col=1)
+            
             fig.add_trace(go.Scatter(x=chart_data.index, y=chart_data["POC"], name="POC", line=dict(width=1, dash="dash")), row=1, col=1)
             fig.add_trace(go.Scatter(x=chart_data.index, y=chart_data["VA_High"], name="VA High", line=dict(width=1, dash="dot")), row=1, col=1)
             fig.add_trace(go.Scatter(x=chart_data.index, y=chart_data["VA_Low"], name="VA Low", line=dict(width=1, dash="dot")), row=1, col=1)
             fig.add_trace(go.Scatter(x=chart_data.index, y=chart_data["Support"], name="Support", line=dict(width=1, dash="dash")), row=1, col=1)
             fig.add_trace(go.Scatter(x=chart_data.index, y=chart_data["Resistance"], name="Resistance", line=dict(width=1, dash="dash")), row=1, col=1)
+            
+            # MACD
             fig.add_trace(go.Scatter(x=chart_data.index, y=chart_data["MACD"], name="MACD"), row=2, col=1)
             fig.add_trace(go.Scatter(x=chart_data.index, y=chart_data["MACD_Signal"], name="Signal"), row=2, col=1)
             fig.add_trace(go.Bar(x=chart_data.index, y=chart_data["MACD_Hist"], name="MACD Hist"), row=2, col=1)
+            
+            # RSI and Volume
             fig.add_trace(go.Scatter(x=chart_data.index, y=chart_data["RSI14"], name="RSI"), row=3, col=1)
             fig.add_trace(go.Bar(x=chart_data.index, y=chart_data["Volume"], name="Volume"), row=3, col=1)
+            
             fig.update_layout(xaxis_rangeslider_visible=False, height=700)
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Loading chart data...")
 
 st.markdown("---")
-st.markdown("<div style='text-align:center;'>Cleaned and PEP8-aligned version.</div>", unsafe_allow_html=True)
+st.markdown("<div style='text-align:center;'>Enhanced Intraday Terminal - Full Nifty Scan & Auto Execution</div>", unsafe_allow_html=True)
