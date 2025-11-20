@@ -27,7 +27,7 @@ IND_TZ = pytz.timezone("Asia/Kolkata")
 CAPITAL = 1_000_000.0
 TRADE_ALLOC = 0.15
 MAX_DAILY_TRADES = 10
-MAX_STOCK_TRADES = 5
+MAX_STOCK_TRADES = 10
 MAX_AUTO_TRADES = 10  # Maximum auto-execution trades
 
 SIGNAL_REFRESH_MS = 60000
