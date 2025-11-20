@@ -87,7 +87,7 @@ def ema(series, span):
 def rsi(series, period=14):
     delta = series.diff()
     gain = delta.clip(lower=0).rolling(window=period).mean()
-    loss = -delta.clip(upper=0).rolling(window=period).mean()
+    loss = (-delta.clip(upper=0)).rolling(window=period).mean()
     rs = gain / loss.replace(0, np.nan)
     rs = rs.fillna(0)
     return 100 - (100 / (1 + rs))
