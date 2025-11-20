@@ -209,7 +209,7 @@ class EnhancedDataManager:
         return float(base)
 
     @st.cache_data(ttl=30)
-    def _fetch_yf(self, symbol, period, interval):
+    def _fetch_yf(_self, symbol, period, interval):  # FIXED: Added underscore before self
         try:
             return yf.download(symbol, period=period, interval=interval, progress=False)
         except Exception:
@@ -670,7 +670,7 @@ with tabs[1]:
                         success, msg = trader.execute_trade(symbol=s["symbol"], action=s["action"], quantity=qty, price=s["entry"], stop_loss=s["stop_loss"], target=s["target"], win_probability=s["win_probability"])
                         if success:
                             st.success(msg)
-                            st.experimental_rerun()
+                            st.rerun()
         else:
             st.info("No confirmed signals found.")
 
@@ -688,11 +688,11 @@ with tabs[2]:
                     success, msg = trader.close_position(symbol)
                     if success:
                         st.success(msg)
-                        st.experimental_rerun()
+                        st.rerun()
         if st.button("Close All"):
             for sym in list(trader.positions.keys()):
                 trader.close_position(sym)
-            st.experimental_rerun()
+            st.rerun()
     else:
         st.info("No open positions.")
 
